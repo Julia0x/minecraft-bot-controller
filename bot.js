@@ -2,16 +2,16 @@ const mineflayer = require('mineflayer');
 const { pathfinder, Movements, goals } = require('mineflayer-pathfinder');
 const readline = require('readline');
 const armorManager = require('mineflayer-armor-manager');
-const { GoalFollow } = goals; // Extract GoalFollow
+const { GoalFollow } = goals;
 const fs = require('fs');
 
 // Load configuration from config.json
 const config = JSON.parse(fs.readFileSync('config.json', 'utf8'));
 
 const bot = mineflayer.createBot({
-  host: config.host, // Server IP from config
-  port: config.port, // Port from config
-  username: config.username, // Bot name from config
+  host: config.host,
+  port: config.port,
+  username: config.username,
   version: false,
   auth: 'offline'
 });
@@ -22,28 +22,28 @@ bot.loadPlugin(armorManager);
 // Dynamically import the auto-eat plugin
 (async () => {
   const autoeat = await import('mineflayer-auto-eat');
-  bot.loadPlugin(autoeat.plugin); // Load the auto-eat plugin
+  bot.loadPlugin(autoeat.plugin);
 })();
 
-let isAttacking = false; // To track if the bot is in attack mode
+let isAttacking = false;
 let killAuraInterval = null;
-let foodCheckInterval = null; // Interval for checking food status
-let lastAttackTime = 0; // Track time for attacks
+let foodCheckInterval = null;
+let lastAttackTime = 0;
+let eatingCooldownActive = false; // To track eating cooldown
 
 // Function to attack the nearest entity
 function attackEntity() {
   if (!killAuraInterval) {
     isAttacking = true;
 
-    // Set up an interval to check food every 5 seconds
     if (!foodCheckInterval) {
       foodCheckInterval = setInterval(() => {
         if (bot.food < 10) {
           console.log('Low food, disabling attack and starting to eat...');
           stopKillAura();
-          bot.autoEat.enable(); // Enable auto-eat
+          handleAutoEat();
         }
-      }, 5000); // Check every 5 seconds
+      }, 5000);
     }
 
     killAuraInterval = setInterval(() => {
@@ -52,26 +52,23 @@ function attackEntity() {
       );
 
       const now = Date.now();
-      if (mob && now - lastAttackTime > 1600) { // Minecraft's attack cooldown is ~1.6 seconds
-
-        // Look in front of the bot instead of directly at the mob
+      if (mob && now - lastAttackTime > 1200) {
         const frontDirectionYaw = bot.entity.yaw; 
         const frontDirectionPitch = bot.entity.pitch;
         bot.look(frontDirectionYaw, frontDirectionPitch, true); 
 
         if (bot.entity.position.distanceTo(mob.position) <= 3) {
-          equipWeapon(); // Equip weapon before attacking
+          equipWeapon(); 
           setTimeout(() => { 
-            bot.attack(mob); // Attack the mob when close enough
-            lastAttackTime = now; // Update the last attack time
-          }, Math.random() * 1000 + 500); // Random delay between 0.5s and 1.5s
+            bot.attack(mob); 
+            lastAttackTime = now; 
+          }, Math.random() * 300 + 300);
         } else {
           const defaultMove = new Movements(bot, require('minecraft-data')(bot.version));
           bot.pathfinder.setMovements(defaultMove);
-          bot.pathfinder.setGoal(new GoalFollow(mob, 1), true); // Move towards the mob
+          bot.pathfinder.setGoal(new GoalFollow(mob, 1), true);
         }
       } else if (!mob) {
-        // Randomly look around if no mob is found
         const randomLook = Math.random();
         if (randomLook < 0.5) {
           const yawChange = (Math.random() - 0.5) * 0.5;
@@ -79,11 +76,11 @@ function attackEntity() {
           bot.look(bot.entity.yaw + yawChange, bot.entity.pitch + pitchChange, false);
         }
       }
-    }, 1000); // Check every second
+    }, 800);
   }
 }
 
-// Function to equip a weapon (e.g., sword or axe)
+// Function to equip a weapon
 function equipWeapon() {
   const weapon = bot.inventory.items().find(item => item.name.includes('sword') || item.name.includes('axe'));
   if (weapon) {
@@ -109,35 +106,50 @@ function stopKillAura() {
   }
 }
 
-// Resume attacking after eating
-bot.on('autoeat_finished', () => {
-  console.log('Finished eating. Resuming attack mode...');
-  if (!isAttacking) {
-    bot.autoEat.disable(); // Disable auto-eat after eating
-    attackEntity(); // Resume attack mode
+// Handle auto-eating with messages and cooldown
+function handleAutoEat() {
+  if (bot.food < bot.autoEat.options.startAt && !eatingCooldownActive && !bot.autoEat.isEating) {
+    console.log('Starting to eat...');
+    bot.chat('I am hungry! Time to eat!');
+    bot.autoEat.enable();
+
+    eatingCooldownActive = true; // Activate cooldown
+
+    // Simulate cooldown after eating
+    setTimeout(() => {
+      console.log('Finished eating. Applying cooldown.');
+      bot.autoEat.disable();
+      bot.chat('I am full now, no more food for a while!');
+
+      // Cooldown message
+      setTimeout(() => {
+        console.log('Cooldown period ended.');
+        eatingCooldownActive = false; // Reset cooldown
+      }, bot.autoEat.options.cooldown);
+    }, 3000); // Simulate time taken to eat (3 seconds)
   }
-});
+}
 
 // Auto-eat setup
 bot.once('spawn', () => {
   bot.autoEat.options = {
     priority: 'foodPoints',
-    startAt: 19, // Start eating when food is 19 or less
-    bannedFood: []
+    startAt: 15,
+    bannedFood: [],
+    cooldown: 5000 // Cooldown of 5 seconds after eating
   };
 });
 
-// Console feedback for auto-eat
+// Listen for health changes to trigger auto-eating
+bot.on('health', handleAutoEat);
+
+// Console feedback for auto-eat events
 bot.on('autoeat_started', () => {
   console.log('Auto Eat started!');
 });
 
 bot.on('autoeat_stopped', () => {
   console.log('Auto Eat stopped!');
-});
-
-bot.on('health', () => {
-  if (bot.food === 20) bot.autoEat.disable();
 });
 
 // Handle console commands
@@ -157,13 +169,16 @@ function handleConsoleInput(input) {
       printArmorStats();
       break;
     case 'autoEquipArmor':
-      autoEquipArmor(); // Command for auto-equip
+      autoEquipArmor();
       break;
     case 'attack':
-      attackEntity(); // Command to attack the nearest entity
+      attackEntity();
       break;
     case 'stopAttack':
-      stopKillAura(); // Command to stop attack mode
+      stopKillAura();
+      break;
+    case 'eat':
+      handleAutoEat(); // Manual trigger for eating
       break;
     default:
       console.log(`Unknown command: ${command}`);
@@ -201,7 +216,7 @@ function printArmorStats() {
 
 // Automatically equip the best armor available
 function autoEquipArmor() {
-   bot.armorManager.equipAll(); // Equip the best armor available
+   bot.armorManager.equipAll();
 }
 
 // Setup console input
