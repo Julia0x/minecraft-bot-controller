@@ -89,4 +89,4 @@ Contributions are welcome! Feel free to submit pull requests or open issues to s
 
 ## Author
 
-- **Navidu** (MOOZ Studio)
+- **SejiMonro** (MOOZ Studio)
